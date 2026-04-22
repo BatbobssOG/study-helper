@@ -1,6 +1,16 @@
 import Link from 'next/link'
+import { requireAdmin } from '@/lib/require-admin'
+import { createAdminClient } from '@/lib/supabase-server'
 
-export default function AdminPage() {
+export default async function AdminPage() {
+  await requireAdmin()
+  const db = createAdminClient()
+
+  const { count: openReports } = await db
+    .from('question_reports')
+    .select('id', { count: 'exact', head: true })
+    .eq('resolved', false)
+
   return (
     <main className="min-h-screen p-8 max-w-4xl mx-auto">
       <div className="mb-8">
@@ -43,6 +53,28 @@ export default function AdminPage() {
           <div className="text-3xl mb-3">📋</div>
           <h2 className="text-lg font-semibold text-white">Upload Past Exam Questions</h2>
           <p className="text-gray-400 text-sm mt-1">Bulk import real exam questions via CSV.</p>
+        </Link>
+
+        <Link
+          href="/admin/reports"
+          className={`block p-6 bg-gray-900 rounded-xl hover:border-orange-500 transition-colors border ${
+            (openReports ?? 0) > 0 ? 'border-red-500/50 bg-red-500/5' : 'border-gray-800'
+          }`}
+        >
+          <div className="flex items-start justify-between">
+            <div className="text-3xl mb-3">🚩</div>
+            {(openReports ?? 0) > 0 && (
+              <span className="text-xs font-bold bg-red-500 text-white px-2 py-0.5 rounded-full">
+                {openReports}
+              </span>
+            )}
+          </div>
+          <h2 className="text-lg font-semibold text-white">Question Reports</h2>
+          <p className="text-gray-400 text-sm mt-1">
+            {(openReports ?? 0) > 0
+              ? `${openReports} open report${openReports !== 1 ? 's' : ''} from students`
+              : 'No open reports right now'}
+          </p>
         </Link>
       </div>
     </main>

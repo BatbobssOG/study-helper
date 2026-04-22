@@ -9,7 +9,7 @@ export default async function StudyPage() {
   const [{ data: sessions }, { count: totalSessions }, { count: masteredCount }] = await Promise.all([
     db
       .from('study_sessions')
-      .select('id, mode, started_at, completed_at')
+      .select('id, mode, started_at, completed_at, section_ids, class_ids')
       .eq('user_id', userId)
       .order('started_at', { ascending: false })
       .limit(5),
@@ -60,21 +60,41 @@ export default async function StudyPage() {
               >
                 <div className="flex items-center gap-3">
                   <span className="text-lg">{s.mode === 'flashcard' ? '🃏' : '📝'}</span>
-                  <span className="text-white capitalize">{s.mode} session</span>
+                  <div>
+                    <span className="text-white capitalize">{s.mode} session</span>
+                    <div className="text-xs text-gray-500 mt-0.5">
+                      {new Date(s.started_at).toLocaleDateString()}
+                    </div>
+                  </div>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
                   {s.completed_at ? (
                     <span className="text-xs text-green-400 bg-green-400/10 px-2 py-1 rounded">
                       Completed
                     </span>
                   ) : (
-                    <span className="text-xs text-yellow-400 bg-yellow-400/10 px-2 py-1 rounded">
-                      In progress
-                    </span>
+                    <>
+                      <span className="text-xs text-yellow-400 bg-yellow-400/10 px-2 py-1 rounded">
+                        In progress
+                      </span>
+                      {s.mode === 'flashcard' && (
+                        <a
+                          href={`/study/flashcards?session=${s.id}&resume=true`}
+                          className="text-xs text-orange-400 bg-orange-400/10 hover:bg-orange-400/20 px-2 py-1 rounded transition-colors"
+                        >
+                          Resume →
+                        </a>
+                      )}
+                      {s.mode === 'quiz' && (
+                        <a
+                          href={`/study/quiz?session=${s.id}`}
+                          className="text-xs text-orange-400 bg-orange-400/10 hover:bg-orange-400/20 px-2 py-1 rounded transition-colors"
+                        >
+                          Resume →
+                        </a>
+                      )}
+                    </>
                   )}
-                  <span className="text-xs text-gray-500">
-                    {new Date(s.started_at).toLocaleDateString()}
-                  </span>
                 </div>
               </div>
             ))}

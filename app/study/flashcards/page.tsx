@@ -5,11 +5,11 @@ import FlashcardClient from './FlashcardClient'
 export default async function FlashcardsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ session?: string }>
+  searchParams: Promise<{ session?: string; resume?: string }>
 }) {
   await requireUser()
-  const { session } = await searchParams
+  const { session, resume } = await searchParams
   if (!session) redirect('/study/select')
 
-  return <FlashcardClient sessionId={session} />
+  return <FlashcardClient sessionId={session} resume={resume === 'true'} />
 }

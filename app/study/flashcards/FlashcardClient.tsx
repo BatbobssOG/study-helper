@@ -1,6 +1,14 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
+
+const REPORT_REASONS = [
+  'Wrong answer',
+  'Bad or confusing question',
+  'Typo or grammar',
+  'Duplicate question',
+  'Other',
+]
 
 type Card = {
   id: string
@@ -11,7 +19,13 @@ type Card = {
   progress: 'mastered' | 'learning' | null
 }
 
-export default function FlashcardClient({ sessionId }: { sessionId: string }) {
+export default function FlashcardClient({
+  sessionId,
+  resume = false,
+}: {
+  sessionId: string
+  resume?: boolean
+}) {
   const [cards, setCards] = useState<Card[]>([])
   const [index, setIndex] = useState(0)
   const [flipped, setFlipped] = useState(false)
@@ -23,9 +37,21 @@ export default function FlashcardClient({ sessionId }: { sessionId: string }) {
   })
   const [done, setDone] = useState(false)
   const [savingProgress, setSavingProgress] = useState(false)
+  const [reportOpen, setReportOpen] = useState(false)
+  const [reportReason, setReportReason] = useState('')
+  const [reportDetails, setReportDetails] = useState('')
+  const [reportStatus, setReportStatus] = useState<'idle' | 'submitting' | 'done'>('idle')
+  const reportedIds = useRef<Set<string>>(new Set())
 
-  useEffect(() => {
-    fetch(`/api/study/flashcards?session=${sessionId}`)
+  const loadCards = useCallback(() => {
+    setLoading(true)
+    setError('')
+    setDone(false)
+    setIndex(0)
+    setFlipped(false)
+    setResults({ mastered: 0, learning: 0 })
+    const url = `/api/study/flashcards?session=${sessionId}${resume ? '&resume=true' : ''}`
+    fetch(url)
       .then((r) => r.json())
       .then((data) => {
         if (data.error) throw new Error(data.error)
@@ -33,7 +59,9 @@ export default function FlashcardClient({ sessionId }: { sessionId: string }) {
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [sessionId])
+  }, [sessionId, resume])
+
+  useEffect(() => { loadCards() }, [loadCards])
 
   const saveProgress = useCallback(
     async (status: 'mastered' | 'learning') => {
@@ -52,19 +80,54 @@ export default function FlashcardClient({ sessionId }: { sessionId: string }) {
     [cards, index]
   )
 
+  const markSessionComplete = useCallback(async () => {
+    await fetch(`/api/study/sessions/${sessionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ completed: true }),
+    })
+  }, [sessionId])
+
   const advance = useCallback(
     async (status: 'mastered' | 'learning') => {
       await saveProgress(status)
       setResults((prev) => ({ ...prev, [status]: prev[status] + 1 }))
+      // Reset report panel for next card
+      setReportOpen(false)
+      setReportReason('')
+      setReportDetails('')
+      setReportStatus('idle')
       if (index + 1 >= cards.length) {
+        await markSessionComplete()
         setDone(true)
       } else {
         setIndex((i) => i + 1)
         setFlipped(false)
       }
     },
-    [saveProgress, index, cards.length]
+    [saveProgress, index, cards.length, markSessionComplete]
   )
+
+  const submitReport = useCallback(async () => {
+    if (!cards[index] || !reportReason) return
+    setReportStatus('submitting')
+    try {
+      await fetch('/api/study/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question_id: cards[index].id,
+          reason: reportReason,
+          details: reportDetails,
+        }),
+      })
+      reportedIds.current.add(cards[index].id)
+      setReportStatus('done')
+      setTimeout(() => setReportOpen(false), 1800)
+    } catch {
+      setReportStatus('idle')
+    }
+  }, [cards, index, reportReason, reportDetails])
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -84,8 +147,12 @@ export default function FlashcardClient({ sessionId }: { sessionId: string }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-gray-400 text-lg">Loading cards…</div>
+      <div className="min-h-screen flex flex-col p-6 max-w-2xl mx-auto">
+        <div className="w-full h-2 bg-gray-800 rounded-full mb-8 mt-12 animate-pulse" />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="w-full max-w-[560px] min-h-[320px] bg-gray-900 border border-gray-800 rounded-2xl animate-pulse" />
+        </div>
+        <div className="mt-8 h-14 bg-gray-800 rounded-xl animate-pulse" />
       </div>
     )
   }
@@ -138,19 +205,12 @@ export default function FlashcardClient({ sessionId }: { sessionId: string }) {
           </div>
           <div className="text-3xl font-bold text-white">{pct}%</div>
           <div className="flex flex-col gap-3">
-            <a
-              href={`/study/flashcards?session=${sessionId}`}
-              className="block py-3 bg-orange-600 hover:bg-orange-500 text-white font-semibold rounded-xl transition-colors"
-              onClick={() => {
-                setIndex(0)
-                setFlipped(false)
-                setDone(false)
-                setResults({ mastered: 0, learning: 0 })
-                setLoading(true)
-              }}
+            <button
+              onClick={loadCards}
+              className="w-full py-3 bg-orange-600 hover:bg-orange-500 text-white font-semibold rounded-xl transition-colors"
             >
               Study again
-            </a>
+            </button>
             <a
               href="/study/select"
               className="block py-3 bg-gray-800 hover:bg-gray-700 text-white font-semibold rounded-xl transition-colors"
@@ -176,8 +236,8 @@ export default function FlashcardClient({ sessionId }: { sessionId: string }) {
     <div className="min-h-screen flex flex-col p-6 max-w-2xl mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
-        <a href="/study" className="text-sm text-gray-400 hover:text-white transition-colors">
-          ← Dashboard
+        <a href="/study" className="text-sm text-gray-400 hover:text-white transition-colors" title="Progress is saved — resume anytime">
+          ← Exit &amp; Save
         </a>
         <span className="text-sm text-gray-400">
           {index + 1} / {cards.length}
@@ -214,6 +274,16 @@ export default function FlashcardClient({ sessionId }: { sessionId: string }) {
             style={{ backfaceVisibility: 'hidden' }}
             className="absolute inset-0 flex flex-col items-center justify-center p-8 bg-gray-900 border border-gray-700 rounded-2xl"
           >
+            {card.progress === 'mastered' && (
+              <span className="absolute top-4 right-4 text-xs text-green-400 bg-green-400/10 px-2 py-1 rounded-full">
+                ● Mastered
+              </span>
+            )}
+            {card.progress === 'learning' && (
+              <span className="absolute top-4 right-4 text-xs text-yellow-400 bg-yellow-400/10 px-2 py-1 rounded-full">
+                ● Learning
+              </span>
+            )}
             <p className="text-xs uppercase tracking-widest text-orange-400 mb-4">Question</p>
             <p className="text-white text-center text-lg leading-relaxed">{card.question}</p>
             <p className="text-gray-500 text-sm mt-6">Tap to reveal answer</p>
@@ -227,9 +297,9 @@ export default function FlashcardClient({ sessionId }: { sessionId: string }) {
             }}
             className="absolute inset-0 flex flex-col items-start justify-center p-8 bg-gray-900 border border-orange-600/40 rounded-2xl overflow-y-auto"
           >
-            <p className="text-xs uppercase tracking-widest text-orange-400 mb-3">Answer</p>
+            <p className="text-xs uppercase tracking-widest text-orange-400 mb-3">Quick Answer</p>
             <p className="text-white font-semibold text-lg mb-4">
-              {card.correct_answer}. {correctText}
+              {correctText}
             </p>
             {card.explanation && (
               <>
@@ -269,9 +339,72 @@ export default function FlashcardClient({ sessionId }: { sessionId: string }) {
             </button>
           </div>
         )}
-        <p className="text-center text-xs text-gray-600 mt-3">
-          Space to flip · ← Still learning · → Got it
-        </p>
+        <div className="flex items-center justify-between mt-3">
+          <p className="text-xs text-gray-600">
+            Space to flip · ← Still learning · → Got it
+          </p>
+          {reportedIds.current.has(card.id) ? (
+            <span className="text-xs text-gray-600">✓ Reported</span>
+          ) : (
+            <button
+              onClick={() => setReportOpen((o) => !o)}
+              className="text-xs text-gray-600 hover:text-gray-400 transition-colors flex items-center gap-1"
+              title="Report an issue with this card"
+            >
+              ⚑ Report
+            </button>
+          )}
+        </div>
+
+        {/* Inline report panel */}
+        {reportOpen && (
+          <div className="mt-3 p-4 bg-gray-900 border border-gray-700 rounded-xl space-y-3">
+            {reportStatus === 'done' ? (
+              <p className="text-sm text-green-400 text-center py-1">✓ Thanks — we&apos;ll review it.</p>
+            ) : (
+              <>
+                <p className="text-xs text-gray-400 font-medium uppercase tracking-wide">What&apos;s the issue?</p>
+                <div className="flex flex-wrap gap-2">
+                  {REPORT_REASONS.map((r) => (
+                    <button
+                      key={r}
+                      onClick={() => setReportReason(r)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                        reportReason === r
+                          ? 'bg-orange-600 text-white'
+                          : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white'
+                      }`}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+                <textarea
+                  value={reportDetails}
+                  onChange={(e) => setReportDetails(e.target.value)}
+                  placeholder="Optional: add more detail…"
+                  rows={2}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-gray-500 resize-none"
+                />
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={() => setReportOpen(false)}
+                    className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={submitReport}
+                    disabled={!reportReason || reportStatus === 'submitting'}
+                    className="px-4 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg transition-colors"
+                  >
+                    {reportStatus === 'submitting' ? 'Sending…' : 'Submit'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

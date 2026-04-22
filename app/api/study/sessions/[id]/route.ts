@@ -3,7 +3,10 @@ import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
 import { createAdminClient } from '@/lib/supabase-server'
 
-export async function POST(req: NextRequest) {
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
   const cookieStore = await cookies()
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -19,27 +22,30 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  const { id } = await params
   const body = await req.json()
-  const { mode, class_ids, section_ids, question_count } = body
-
-  if (!mode || !Array.isArray(class_ids) || class_ids.length === 0) {
-    return NextResponse.json({ error: 'mode and class_ids are required' }, { status: 400 })
-  }
 
   const db = createAdminClient()
-  const { data, error } = await db
+
+  // Verify session belongs to this user
+  const { data: session } = await db
     .from('study_sessions')
-    .insert({
-      user_id: user.id,
-      mode,
-      class_ids,
-      section_ids: section_ids?.length ? section_ids : null,
-      question_count: question_count ?? null,
-    })
-    .select('id')
+    .select('id, user_id')
+    .eq('id', id)
+    .eq('user_id', user.id)
     .single()
+
+  if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 })
+
+  const updates: Record<string, unknown> = {}
+  if (body.completed) updates.completed_at = new Date().toISOString()
+
+  const { error } = await db
+    .from('study_sessions')
+    .update(updates)
+    .eq('id', id)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  return NextResponse.json({ session_id: data.id })
+  return NextResponse.json({ ok: true })
 }

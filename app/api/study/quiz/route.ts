@@ -26,18 +26,20 @@ export async function GET(req: NextRequest) {
 
   const { data: session } = await db
     .from('study_sessions')
-    .select('section_ids, class_ids, user_id')
+    .select('section_ids, class_ids, question_count, user_id')
     .eq('id', session_id)
     .eq('user_id', user.id)
     .single()
 
   if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 })
 
+  const limit = session.question_count ?? 20
+
   let query = db
     .from('quiz_questions')
-    .select('id, question, options, correct_answer, explanation, section_id')
+    .select('id, question, options, correct_answer, explanation')
     .eq('approved', true)
-    .limit(50)
+    .limit(limit * 3) // fetch extra to shuffle down to limit
 
   if (session.section_ids?.length) {
     query = query.in('section_id', session.section_ids)
@@ -48,25 +50,10 @@ export async function GET(req: NextRequest) {
   const { data: questions, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  const shuffled = [...(questions ?? [])].sort(() => Math.random() - 0.5)
-
-  const { data: progress } = await db
-    .from('flashcard_progress')
-    .select('question_id, status')
-    .eq('user_id', user.id)
-    .in('question_id', shuffled.map((q) => q.id))
-
-  const progressMap = new Map(
-    (progress ?? []).map((p) => [p.question_id, p.status])
-  )
-
-  const resume = req.nextUrl.searchParams.get('resume') === 'true'
-  const filtered = resume
-    ? shuffled.filter((q) => progressMap.get(q.id) !== 'mastered')
-    : shuffled
+  const shuffled = [...(questions ?? [])].sort(() => Math.random() - 0.5).slice(0, limit)
 
   return NextResponse.json({
-    cards: filtered.map((q) => {
+    questions: shuffled.map((q) => {
       const o = q.options as Record<string, string>
       return {
         ...q,
@@ -77,7 +64,6 @@ export async function GET(req: NextRequest) {
           D: o.D ?? o.d ?? '',
         },
         correct_answer: (q.correct_answer as string).toUpperCase(),
-        progress: progressMap.get(q.id) ?? null,
       }
     }),
   })
