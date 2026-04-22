@@ -6,10 +6,17 @@ export default async function AdminPage() {
   await requireAdmin()
   const db = createAdminClient()
 
-  const { count: openReports } = await db
-    .from('question_reports')
-    .select('id', { count: 'exact', head: true })
-    .eq('resolved', false)
+  const [
+    { count: openReports },
+    { count: pendingReview },
+    { count: approvedQuestions },
+    { count: totalSections },
+  ] = await Promise.all([
+    db.from('question_reports').select('id', { count: 'exact', head: true }).eq('resolved', false),
+    db.from('quiz_questions').select('id', { count: 'exact', head: true }).eq('approved', false),
+    db.from('quiz_questions').select('id', { count: 'exact', head: true }).eq('approved', true),
+    db.from('sections').select('id', { count: 'exact', head: true }),
+  ])
 
   return (
     <main className="min-h-screen p-8 max-w-4xl mx-auto">
@@ -25,16 +32,27 @@ export default async function AdminPage() {
         >
           <div className="text-3xl mb-3">📑</div>
           <h2 className="text-lg font-semibold text-white">Manage Sections</h2>
-          <p className="text-gray-400 text-sm mt-1">Generate AI questions from slides, section by section.</p>
+          <p className="text-gray-400 text-sm mt-1">{totalSections ?? 0} sections · {approvedQuestions ?? 0} questions approved</p>
         </Link>
 
         <Link
           href="/admin/review"
-          className="block p-6 bg-gray-900 border border-gray-800 rounded-xl hover:border-orange-500 transition-colors"
+          className={`block p-6 bg-gray-900 rounded-xl transition-colors border ${
+            (pendingReview ?? 0) > 0 ? 'border-orange-500/50 hover:border-orange-400' : 'border-gray-800 hover:border-orange-500'
+          }`}
         >
-          <div className="text-3xl mb-3">✅</div>
+          <div className="flex items-start justify-between">
+            <div className="text-3xl mb-3">✅</div>
+            {(pendingReview ?? 0) > 0 && (
+              <span className="text-xs font-bold bg-orange-500 text-white px-2 py-0.5 rounded-full">
+                {pendingReview}
+              </span>
+            )}
+          </div>
           <h2 className="text-lg font-semibold text-white">Review Queue</h2>
-          <p className="text-gray-400 text-sm mt-1">Approve or delete AI-generated quiz questions.</p>
+          <p className="text-gray-400 text-sm mt-1">
+            {(pendingReview ?? 0) > 0 ? `${pendingReview} question${pendingReview !== 1 ? 's' : ''} pending review` : 'All caught up'}
+          </p>
         </Link>
 
         <Link

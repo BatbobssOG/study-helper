@@ -31,16 +31,23 @@ export default async function StudyPage() {
         <p className="text-gray-400 mt-1">SAIT Winter 2026 Pre-Employment Pipetrades</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 mb-8">
-        <div className="p-5 bg-gray-900 border border-gray-800 rounded-xl">
-          <div className="text-3xl font-bold text-orange-400">{totalSessions ?? 0}</div>
-          <div className="text-sm text-gray-400 mt-1">Study sessions</div>
+      {(totalSessions ?? 0) === 0 ? (
+        <div className="mb-8 p-5 bg-orange-500/10 border border-orange-500/30 rounded-xl">
+          <p className="text-orange-300 font-semibold mb-1">👋 Welcome!</p>
+          <p className="text-gray-300 text-sm">You have 943 practice questions across 9 sections. Hit <strong>Start Studying</strong> to pick your sections and begin.</p>
         </div>
-        <div className="p-5 bg-gray-900 border border-gray-800 rounded-xl">
-          <div className="text-3xl font-bold text-green-400">{masteredCount ?? 0}</div>
-          <div className="text-sm text-gray-400 mt-1">Cards mastered</div>
+      ) : (
+        <div className="grid grid-cols-2 gap-4 mb-8">
+          <div className="p-5 bg-gray-900 border border-gray-800 rounded-xl">
+            <div className="text-3xl font-bold text-orange-400">{totalSessions ?? 0}</div>
+            <div className="text-sm text-gray-400 mt-1">Study sessions</div>
+          </div>
+          <div className="p-5 bg-gray-900 border border-gray-800 rounded-xl">
+            <div className="text-3xl font-bold text-green-400">{masteredCount ?? 0}</div>
+            <div className="text-sm text-gray-400 mt-1">Cards mastered</div>
+          </div>
         </div>
-      </div>
+      )}
 
       <Link
         href="/study/select"

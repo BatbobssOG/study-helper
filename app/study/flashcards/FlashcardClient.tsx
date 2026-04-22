@@ -245,7 +245,7 @@ export default function FlashcardClient({
       </div>
 
       {/* Progress bar */}
-      <div className="w-full h-1.5 bg-gray-800 rounded-full mb-8">
+      <div className="w-full h-2 bg-gray-800 rounded-full mb-8">
         <div
           className="h-full bg-orange-500 rounded-full transition-all duration-300"
           style={{ width: `${((index + 1) / cards.length) * 100}%` }}

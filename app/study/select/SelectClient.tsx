@@ -9,9 +9,11 @@ type SectionRow = { id: string; name: string; class_id: string }
 export default function SelectClient({
   classes,
   sections,
+  questionCounts,
 }: {
   classes: ClassRow[]
   sections: SectionRow[]
+  questionCounts: Record<string, number>
 }) {
   const router = useRouter()
   const [mode, setMode] = useState<'flashcard' | 'quiz'>('flashcard')
@@ -22,6 +24,17 @@ export default function SelectClient({
 
   const sectionsByClass = (classId: string) => sections.filter((s) => s.class_id === classId)
 
+  const allSelectableSections = sections.filter((s) => (questionCounts[s.id] ?? 0) > 0)
+  const allSelected = allSelectableSections.length > 0 &&
+    allSelectableSections.every((s) => selectedSections.has(s.id))
+
+  const toggleGlobalAll = () => {
+    setSelectedSections(() => {
+      if (allSelected) return new Set()
+      return new Set(allSelectableSections.map((s) => s.id))
+    })
+  }
+
   const toggleSection = (id: string) => {
     setSelectedSections((prev) => {
       const next = new Set(prev)
@@ -31,11 +44,13 @@ export default function SelectClient({
   }
 
   const toggleAllInClass = (classId: string) => {
-    const ids = sectionsByClass(classId).map((s) => s.id)
-    const allSelected = ids.every((id) => selectedSections.has(id))
+    const ids = sectionsByClass(classId)
+      .filter((s) => (questionCounts[s.id] ?? 0) > 0)
+      .map((s) => s.id)
+    const allClassSelected = ids.every((id) => selectedSections.has(id))
     setSelectedSections((prev) => {
       const next = new Set(prev)
-      if (allSelected) ids.forEach((id) => next.delete(id))
+      if (allClassSelected) ids.forEach((id) => next.delete(id))
       else ids.forEach((id) => next.add(id))
       return next
     })
@@ -78,25 +93,21 @@ export default function SelectClient({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Mode tabs */}
       <div className="flex gap-2 p-1 bg-gray-900 border border-gray-800 rounded-xl">
         <button
           onClick={() => setMode('flashcard')}
-          className={`flex-1 py-2.5 text-sm font-semibold rounded-lg transition-colors ${
-            mode === 'flashcard'
-              ? 'bg-orange-600 text-white'
-              : 'text-gray-400 hover:text-white'
+          className={`flex-1 py-2.5 text-sm font-semibold rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:ring-offset-gray-950 ${
+            mode === 'flashcard' ? 'bg-orange-600 text-white' : 'text-gray-400 hover:text-white'
           }`}
         >
           🃏 Flashcards
         </button>
         <button
           onClick={() => setMode('quiz')}
-          className={`flex-1 py-2.5 text-sm font-semibold rounded-lg transition-colors ${
-            mode === 'quiz'
-              ? 'bg-orange-600 text-white'
-              : 'text-gray-400 hover:text-white'
+          className={`flex-1 py-2.5 text-sm font-semibold rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:ring-offset-gray-950 ${
+            mode === 'quiz' ? 'bg-orange-600 text-white' : 'text-gray-400 hover:text-white'
           }`}
         >
           📝 Quiz
@@ -112,7 +123,7 @@ export default function SelectClient({
               <button
                 key={n}
                 onClick={() => setQuestionCount(n)}
-                className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-colors ${
+                className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:ring-offset-gray-950 ${
                   questionCount === n
                     ? 'bg-orange-600 text-white'
                     : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white'
@@ -125,13 +136,31 @@ export default function SelectClient({
         </div>
       )}
 
+      {/* Global select all */}
+      <div className="flex items-center justify-between px-1">
+        <span className="text-sm text-gray-500">
+          {selectedSections.size > 0
+            ? `${selectedSections.size} section${selectedSections.size > 1 ? 's' : ''} selected`
+            : 'No sections selected'}
+        </span>
+        <button
+          onClick={toggleGlobalAll}
+          className="text-sm text-orange-400 hover:text-orange-300 transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:ring-offset-gray-950 rounded"
+        >
+          {allSelected ? 'Deselect all' : 'Select all sections'}
+        </button>
+      </div>
+
       {/* Section picker */}
-      <div className="space-y-4">
+      <div className="space-y-3">
         {classes.map((cls) => {
           const classSections = sectionsByClass(cls.id)
           if (classSections.length === 0) return null
-          const allSelected = classSections.every((s) => selectedSections.has(s.id))
-          const someSelected = classSections.some((s) => selectedSections.has(s.id))
+
+          const selectableInClass = classSections.filter((s) => (questionCounts[s.id] ?? 0) > 0)
+          const allClassSelected = selectableInClass.length > 0 &&
+            selectableInClass.every((s) => selectedSections.has(s.id))
+          const someClassSelected = classSections.some((s) => selectedSections.has(s.id))
 
           return (
             <div key={cls.id} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
@@ -139,32 +168,47 @@ export default function SelectClient({
                 <span className="font-semibold text-white">{cls.name}</span>
                 <button
                   onClick={() => toggleAllInClass(cls.id)}
-                  className={`text-sm px-3 py-1 rounded-lg transition-colors ${
-                    allSelected
+                  disabled={selectableInClass.length === 0}
+                  className={`text-sm px-3 py-1 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:ring-offset-gray-900 disabled:opacity-30 disabled:cursor-not-allowed ${
+                    allClassSelected
                       ? 'bg-orange-600 text-white'
-                      : someSelected
+                      : someClassSelected
                         ? 'bg-orange-600/20 text-orange-300 border border-orange-600/50'
                         : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
                   }`}
                 >
-                  {allSelected ? 'Deselect all' : 'Select all'}
+                  {allClassSelected ? 'Deselect all' : 'Select all'}
                 </button>
               </div>
               <div className="divide-y divide-gray-800">
-                {classSections.map((sec) => (
-                  <label
-                    key={sec.id}
-                    className="flex items-center gap-3 px-5 py-3 cursor-pointer hover:bg-gray-800/50 transition-colors"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedSections.has(sec.id)}
-                      onChange={() => toggleSection(sec.id)}
-                      className="w-4 h-4 accent-orange-500 cursor-pointer"
-                    />
-                    <span className="text-gray-200 text-sm">{sec.name}</span>
-                  </label>
-                ))}
+                {classSections.map((sec) => {
+                  const count = questionCounts[sec.id] ?? 0
+                  const isEmpty = count === 0
+                  return (
+                    <label
+                      key={sec.id}
+                      className={`flex items-center justify-between px-5 py-3 transition-colors ${
+                        isEmpty
+                          ? 'opacity-40 cursor-not-allowed'
+                          : 'cursor-pointer hover:bg-gray-800/50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedSections.has(sec.id)}
+                          onChange={() => !isEmpty && toggleSection(sec.id)}
+                          disabled={isEmpty}
+                          className="w-4 h-4 accent-orange-500 cursor-pointer disabled:cursor-not-allowed focus:ring-2 focus:ring-orange-500"
+                        />
+                        <span className="text-gray-200 text-sm">{sec.name}</span>
+                      </div>
+                      <span className={`text-xs ml-4 flex-shrink-0 ${isEmpty ? 'text-gray-600' : 'text-gray-500'}`}>
+                        {isEmpty ? '— no questions' : `${count} question${count !== 1 ? 's' : ''}`}
+                      </span>
+                    </label>
+                  )
+                })}
               </div>
             </div>
           )
@@ -176,7 +220,7 @@ export default function SelectClient({
       <button
         onClick={handleStart}
         disabled={loading || selectedSections.size === 0}
-        className="w-full py-4 bg-orange-600 hover:bg-orange-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl text-lg transition-colors"
+        className="w-full py-4 bg-orange-600 hover:bg-orange-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl text-lg transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 focus:ring-offset-gray-950"
       >
         {loading
           ? 'Starting…'
@@ -184,9 +228,7 @@ export default function SelectClient({
             ? mode === 'quiz'
               ? `Start Quiz — ${questionCount} questions (${selectedSections.size} section${selectedSections.size > 1 ? 's' : ''})`
               : `Start Flashcards (${selectedSections.size} section${selectedSections.size > 1 ? 's' : ''})`
-            : mode === 'quiz'
-              ? 'Start Quiz'
-              : 'Start Flashcards'}
+            : mode === 'quiz' ? 'Start Quiz' : 'Start Flashcards'}
       </button>
     </div>
   )

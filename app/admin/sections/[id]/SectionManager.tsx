@@ -125,9 +125,16 @@ export default function SectionManager({ section, className, slides }: Props) {
     <main className="min-h-screen p-6 max-w-5xl mx-auto">
       {/* Header */}
       <div className="mb-6">
-        <Link href="/admin/sections" className="text-sm text-gray-500 hover:text-orange-400 transition-colors mb-3 inline-block">
-          ← All Sections
-        </Link>
+        {/* Breadcrumb */}
+        <nav className="flex items-center gap-1.5 text-sm text-gray-500 mb-4 flex-wrap">
+          <Link href="/admin" className="hover:text-orange-400 transition-colors">Admin</Link>
+          <span>›</span>
+          <Link href="/admin/sections" className="hover:text-orange-400 transition-colors">All Sections</Link>
+          <span>›</span>
+          <span className="text-gray-400">{className}</span>
+          <span>›</span>
+          <span className="text-white">{section.name}</span>
+        </nav>
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <p className="text-orange-400 text-sm font-medium uppercase tracking-wide">{className}</p>

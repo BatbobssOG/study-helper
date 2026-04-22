@@ -15,6 +15,14 @@ export default function Home() {
           </p>
         </div>
 
+        {/* Feature bullets */}
+        <ul className="text-left space-y-2 text-sm text-gray-400">
+          <li className="flex items-start gap-2"><span className="text-orange-400 mt-0.5">✓</span>943 practice questions from your course material</li>
+          <li className="flex items-start gap-2"><span className="text-orange-400 mt-0.5">✓</span>Flashcard mode with progress tracking &amp; resume</li>
+          <li className="flex items-start gap-2"><span className="text-orange-400 mt-0.5">✓</span>Scored quiz mode with per-question review</li>
+          <li className="flex items-start gap-2"><span className="text-orange-400 mt-0.5">✓</span>Built for SAIT Winter 2026 Pipetrades</li>
+        </ul>
+
         {/* Divider */}
         <div className="border-t border-gray-800" />
 
