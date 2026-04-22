@@ -48,7 +48,7 @@ export default async function ReportsPage() {
           <p>No open reports — all clear.</p>
         </div>
       ) : (
-        <ReportsClient reports={reports as Parameters<typeof ReportsClient>[0]['reports']} />
+        <ReportsClient reports={reports as unknown as Parameters<typeof ReportsClient>[0]['reports']} />
       )}
     </main>
   )
