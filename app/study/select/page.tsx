@@ -2,6 +2,8 @@ import { requireUser } from '@/lib/require-user'
 import { createAdminClient } from '@/lib/supabase-server'
 import SelectClient from './SelectClient'
 
+export const dynamic = 'force-dynamic'
+
 export default async function SelectPage() {
   await requireUser()
   const db = createAdminClient()
