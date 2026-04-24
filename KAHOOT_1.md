@@ -1,8 +1,9 @@
 # KAHOOT_1.md — Pipetrades Live Game: Architecture & Design Plan
 
 > **Status:** Planning only — no code, no database changes, no deployment.
-> **Last updated:** 2026-04-22
+> **Last updated:** 2026-04-24 (Rev 3 — post-codebase audit)
 > **Prerequisite:** Pipetrades Study Helper is already live with Supabase, Next.js App Router, quiz_questions, sections, classes, and profiles tables in place.
+> **Verified against:** actual codebase at `BatbobssOG/study-helper`, `master` branch, audited 2026-04-24.
 
 ---
 
@@ -26,6 +27,15 @@ Before reading the plan, here is what was wrong in the first draft and what chan
 | 12 | No UNIQUE DB constraint on display names — race condition allows duplicate names | Added `UNIQUE(session_id, display_name)` constraint to `kahoot_player_scores` |
 | 13 | Broadcast channel never explicitly closed after `GAME_END` — leaked connections | Specified: clients call `channel.unsubscribe()` on `GAME_END` event and on page navigation |
 | 14 | `player_id` from localStorage incompatible with Next.js SSR — throws hydration error | Player game view is explicitly `'use client'`; `player_id` read only inside `useEffect` after mount |
+| 15 | Server cannot subscribe to Presence events — host disconnect detection was described as "server detects via Presence disconnect event", which is impossible in a stateless serverless Next.js API route | Replaced with a client-driven heartbeat: host sends `POST /api/kahoot/heartbeat` every 15 seconds; all clients detect a stale host by checking `host_last_seen_at` on `GET /api/kahoot/state/[code]`; if `host_last_seen_at` is older than 30s, players show "Host disconnected — game paused" without needing a server Presence listener |
+| 16 | `ORDER BY array_position($1, id)` for fetching pre-drawn questions in order is not supported by the Supabase JS client's `.select()` — it generates plain SQL with no way to inject custom `ORDER BY` expressions | A Supabase RPC function `get_ordered_questions(p_ids uuid[])` must be created in Phase 1 and called via `supabase.rpc('get_ordered_questions', { p_ids: question_ids })`; the function returns questions in the exact pre-drawn order |
+| 17 | Server broadcasting via Supabase Realtime in a serverless Next.js API route opens a full WebSocket connection per invocation — this is expensive, slow to establish (~200–400ms), and unreliable in short-lived serverless functions | Use the **Supabase Realtime REST Broadcast API** instead: `POST https://{project}.supabase.co/realtime/v1/api/broadcast` with the service role key as `Authorization: Bearer`. This sends a broadcast event over HTTP with no WebSocket handshake. The service role key is already in the environment (`SUPABASE_SERVICE_ROLE_KEY`). This is a standard fetch call, not a Realtime channel subscription |
+| 18 | `GET /api/kahoot/state/[code]` and all other Kahoot API routes will be served from Next.js's response cache — clients calling state on reconnect may receive stale game state (this exact bug already caused Plastic Pipe section to show zero questions on the study select page) | All `/api/kahoot/*` route files must export `export const dynamic = 'force-dynamic'` at the top. This is the same fix already applied to `app/study/select/page.tsx` in commit `4254ed0` |
+| 19 | `pg_cron` for session cleanup is only available on Supabase **Pro plan** ($25/month) — if the project is on the free tier, `pg_cron` is not available and scheduled cleanup will silently never run | Define a free-tier fallback: `GET /api/kahoot/state/[code]` performs a **lazy cleanup check** — if the fetched session is `in_progress` with `started_at` older than 3 hours, or `lobby` with `created_at` older than 24 hours, the endpoint immediately marks it `abandoned` before returning. This ensures stale sessions are cleaned up on access even without a cron job. If Pro plan is in use, keep pg_cron as the primary mechanism |
+| 20 | The session creation form at `/study/kahoot` is a `'use client'` component and needs per-section approved question counts, but the existing count-map pattern in `select/page.tsx` is server-side only — the form cannot reuse it directly | Add a dedicated `GET /api/kahoot/section-counts` endpoint that returns `{ [section_id]: count }` for all approved questions. The creation form fetches this on mount. This is a read-only, unauthenticated-safe query (no sensitive data). Alternatively, the `/study/kahoot` creation page can be a server component that passes counts as props to a `'use client'` form — same pattern as `select/page.tsx` → `SelectClient.tsx` |
+| 21 | `expected_answer_count` described as "decremented when Presence drops" — server has no Presence listener, so it cannot decrement this value automatically | Remove "decrement on Presence drop" from the design. The snapshot taken at `question_revealed_at` stays fixed. If a player disconnects mid-question, their answer will never arrive — the host's "X/Y answered" count will show `N-1/Y`. To surface disconnected players: compare `expected_answer_count` against `kahoot_player_scores.last_seen_at` rows; any player with `last_seen_at` older than 30 seconds is considered disconnected and shown separately as "(1 player disconnected)" in the host view. This is driven by the existing heartbeat data, not Presence |
+| 22 | CSV export is mentioned in Section 5.3 and the Final Results view, but no API route is defined in Section 8 for it | Added `GET /api/kahoot/export/[sessionId]` to the route list (see Section 8); auth: must be `host_user_id`; generates and streams the CSV file with `Content-Disposition: attachment` header |
+| 23 | Session creation form shows sections with < 10 questions greyed out, but a host could still select a valid mix where the *total available* across all selected sections is fewer than the chosen question count — the client gives no feedback until the server rejects | The creation form must compute and display a **live "Questions available: N"** counter that sums the fetched section counts for all currently-selected sections and compares against the chosen question count. The "Create Session →" button is disabled with an inline error message if `available < chosen_count`. Server-side validation remains as the authoritative check |
 
 ---
 
@@ -252,15 +262,33 @@ Rationale:
 Polling rejected: 1–2 second minimum lag is unacceptable for a timed quiz.
 Standalone WebSocket server rejected: extra infrastructure, cost, and deployment complexity.
 
-### 6.2 Critical Rule: Server Broadcasts, Clients Only Subscribe
+### 6.2 Critical Rule: Server Broadcasts via REST, Clients Only Subscribe
 
 **No client ever sends a Broadcast event directly.** All game-state changes follow this pattern:
 
 ```
-Client action → POST to API route → API validates auth + game phase → DB write → API broadcasts event
+Client action → POST to API route → API validates auth + game phase → DB write → API sends REST broadcast → clients receive event
 ```
 
 This prevents any player from sending a fake `REVEAL` or `GAME_END` event that other players would see. The channel is open to all subscribers but only the server has write authority over game state.
+
+**Server-side broadcasting must use the Supabase Realtime REST API, not a WebSocket channel:**
+
+```
+POST https://{SUPABASE_PROJECT_REF}.supabase.co/realtime/v1/api/broadcast
+Authorization: Bearer {SUPABASE_SERVICE_ROLE_KEY}
+Content-Type: application/json
+
+{
+  "messages": [{
+    "topic": "realtime:game:WELD42",
+    "event": "REVEAL",
+    "payload": { ... }
+  }]
+}
+```
+
+**Why not `supabase.channel().subscribe().send()`?** Next.js API routes are stateless serverless functions. Opening a WebSocket handshake (~200–400ms) on every API invocation is slow and unreliable — the function may terminate before the socket is established. The REST broadcast endpoint sends over HTTP with no WebSocket overhead. The service role key (`SUPABASE_SERVICE_ROLE_KEY`) is already in the environment. No new credentials needed.
 
 ### 6.3 Channel Structure
 
@@ -295,6 +323,8 @@ Clients subscribe on page load. Clients call `channel.unsubscribe()` on `GAME_EN
 - Host subscribes to Presence to render the lobby player list with animated entries
 - During the game, player connection state is tracked via `kahoot_player_scores.last_seen_at` (updated on each answer), not via Presence — Presence is not reliable enough for mid-game tracking
 
+**Important — Presence is client-side only.** The server cannot subscribe to Presence events. All disconnect detection during gameplay must be inferred from `last_seen_at` timestamps in the DB, not from Presence leave events. See Section 6.7 for the host heartbeat mechanism.
+
 ### 6.6 State Recovery (Critical)
 
 Any time a client loads or reloads `/play/[code]` or `/study/kahoot/[sessionId]`, it must:
@@ -304,6 +334,29 @@ Any time a client loads or reloads `/play/[code]` or `/study/kahoot/[sessionId]`
 3. Then subscribe to the Realtime channel to receive future events
 
 This means the game works correctly even if a player's phone sleeps for 30 seconds — they reconnect, fetch state, and rejoin the right screen. Broadcast events are only used for *pushing updates*, not as the sole source of truth.
+
+### 6.7 Host Heartbeat (Disconnect Detection Without Server Presence)
+
+Because the server cannot subscribe to Presence events, host disconnect must be detected via a heartbeat:
+
+- The host's client sends `POST /api/kahoot/heartbeat` every **15 seconds** while the game is active
+- Each heartbeat updates `kahoot_sessions.host_last_seen_at = now()` for the session
+- Players polling `GET /api/kahoot/state/[code]` check this field:
+  - If `host_last_seen_at` is more than **30 seconds ago**: the client shows "Host disconnected — game paused"
+  - If `host_last_seen_at` is more than **5 minutes ago**: the session is marked `abandoned` by the state endpoint's lazy cleanup (see Section 14)
+- When the host reconnects and their client resumes the heartbeat, the next state poll by players shows a fresh `host_last_seen_at` and they automatically resume
+
+This replaces the previous "server detects via Presence disconnect event" description, which was architecturally impossible.
+
+### 6.8 Caching Note — All Kahoot Routes Must Opt Out
+
+Next.js App Router caches API route responses by default. Every file under `app/api/kahoot/` must include:
+
+```typescript
+export const dynamic = 'force-dynamic'
+```
+
+This is not optional — the state endpoint returning cached data on reconnect is game-breaking. This is the same class of bug that caused section question counts to show zero on the study select page (fixed in commit `4254ed0`).
 
 ---
 
@@ -339,7 +392,18 @@ This means the game works correctly even if a player's phone sleeps for 30 secon
 > - `/next` only runs if `phase = 'leaderboard'`
 > - `/end` only runs if `state = 'in_progress'`
 
-> **`question_ids` array ordering** must be preserved when fetching questions. Use `SELECT ... WHERE id = ANY($1) ORDER BY array_position($1, id)` to maintain the pre-drawn order.
+> **`question_ids` array ordering** must be preserved when fetching questions. The Supabase JS client's `.select()` cannot express `ORDER BY array_position($1, id)` directly. A Supabase RPC function must be created:
+>
+> ```sql
+> CREATE OR REPLACE FUNCTION get_ordered_questions(p_ids uuid[])
+> RETURNS SETOF quiz_questions AS $$
+>   SELECT * FROM quiz_questions
+>   WHERE id = ANY(p_ids)
+>   ORDER BY array_position(p_ids, id);
+> $$ LANGUAGE sql STABLE;
+> ```
+>
+> Called via `supabase.rpc('get_ordered_questions', { p_ids: question_ids })`. This function must be created as part of Phase 1 database setup.
 
 ### 7.2 `kahoot_player_scores`
 
@@ -423,17 +487,25 @@ auth.users ──────────────< kahoot_sessions (host_use
 
 ```
 app/api/kahoot/
-├── create/route.ts            POST  Create session, lock question list, generate code
-├── join/route.ts              POST  Player joins lobby (or rejoins in_progress)
-├── start/route.ts             POST  Host starts game; state→in_progress; broadcast GAME_START
-├── answer/route.ts            POST  Player submits answer; server scores; updates DB
-├── answer-count/[id]/route.ts GET   Host polls for live "X/Y answered" count
-├── reveal/route.ts            POST  Host reveals answer; scores pushed; broadcast REVEAL
-├── leaderboard/route.ts       POST  Host pushes leaderboard; broadcast LEADERBOARD
-├── next/route.ts              POST  Host advances to next question; broadcast QUESTION
-├── end/route.ts               POST  Host ends game; final ranks saved; broadcast GAME_END
-└── state/[code]/route.ts      GET   Any client fetches full current state (source of truth)
+├── create/route.ts             POST  Create session, lock question list, generate code
+├── join/route.ts               POST  Player joins lobby (or rejoins in_progress)
+├── start/route.ts              POST  Host starts game; state→in_progress; broadcast GAME_START
+├── heartbeat/route.ts          POST  Host sends every 15s; updates host_last_seen_at
+├── answer/route.ts             POST  Player submits answer; server scores; updates DB
+├── answer-count/[id]/route.ts  GET   Host polls for live "X/Y answered" count
+├── reveal/route.ts             POST  Host reveals answer; scores pushed; broadcast REVEAL
+├── leaderboard/route.ts        POST  Host pushes leaderboard; broadcast LEADERBOARD
+├── next/route.ts               POST  Host advances to next question; broadcast QUESTION
+├── end/route.ts                POST  Host ends game; final ranks saved; broadcast GAME_END
+├── export/[sessionId]/route.ts GET   Host downloads final results as CSV (auth required)
+├── section-counts/route.ts     GET   Returns { [section_id]: count } for creation form
+└── state/[code]/route.ts       GET   Any client fetches full current state (source of truth)
+                                      Also performs lazy cleanup of stale sessions
 ```
+
+> **Every route file under `app/api/kahoot/` must export `export const dynamic = 'force-dynamic'`** — see Section 6.8.
+
+> **All broadcasts use the Supabase Realtime REST API** (HTTP POST to `/realtime/v1/api/broadcast`), not a WebSocket channel subscription — see Section 6.2.
 
 **Why the GET `/state/[code]` endpoint is critical:**
 Every time a player or host loads or reloads their page, they call this endpoint first to determine which view to render. This makes reconnection, tab sleep recovery, and browser refresh all work correctly. The Realtime channel is subscribed to *after* state is fetched — it only handles *new* events going forward.
@@ -476,12 +548,13 @@ app/
 ### 10.1 Host Views
 
 **Session Creation Form** (`/study/kahoot`)
+- The `/study/kahoot` page is a **server component** that fetches section question counts from the DB and passes them as props to a `'use client'` form component — the same `page.tsx` → `Client.tsx` pattern used by `select/page.tsx` → `SelectClient.tsx`. This avoids an extra client-side API fetch and keeps the creation form fast.
 - Text input: session name (required, max 40 chars)
 - Class selector (matches existing select page styling)
 - Section multi-select — shows approved question count per section; sections with < 10 questions are greyed out with a tooltip
 - Question count picker: 10 / 20 / 30
 - Time limit picker: 15s / 20s / 30s (default 20s)
-- Real-time validation: must have enough approved questions across selected sections
+- **Live "Questions available: N" counter** — sums the approved counts for all currently-selected sections. Updates as the host checks/unchecks sections. If `available < chosen_count`, shows an inline error: "Not enough questions (need 20, only 14 available)" and disables the "Create Session →" button. This prevents a round-trip rejection from the server.
 - "Create Session →" button
 
 **Lobby View** (`/study/kahoot/[sessionId]`, `phase = 'lobby'`)
@@ -586,15 +659,15 @@ app/
 | Player tab sleeps / network drops briefly | On reconnect, player calls `GET /api/kahoot/state/[code]` and renders the current phase correctly; re-subscribes to Realtime channel |
 | Player disconnects and wants to rejoin | Player goes to `/play`, enters same code + same display name → API detects matching `player_id` in localStorage → returns existing player data and puts them back in the game |
 | Player rejoins with different device (no localStorage) | Treated as a new player; existing player row is orphaned (keeps their score in the DB but they can't see it); they get a new `player_id` and effectively start fresh — acceptable tradeoff for guest players |
-| Host disconnects | Server detects via Presence disconnect event; updates `state = 'in_progress'` (no change) but records `host_disconnected_at`; broadcasts `HOST_DISCONNECT`; players see "Host disconnected — game paused"; timer is frozen client-side (no new questions can be revealed without the host); host can reconnect within 5 minutes and resume from current state |
-| Host disconnects > 5 minutes | pg_cron cleanup job marks session `abandoned`; remaining clients polling state see this and show "Session ended" screen |
+| Host disconnects | Host's client stops sending `POST /api/kahoot/heartbeat`. Players polling `GET /api/kahoot/state/[code]` detect that `host_last_seen_at` is > 30 seconds old and show "Host disconnected — game paused". Timer is frozen client-side. No new questions can be revealed without the host. The server does NOT detect this directly — it is entirely client-inferred from the stale `host_last_seen_at` timestamp. |
+| Host disconnects > 5 minutes | The state endpoint's lazy cleanup marks the session `abandoned` when any client next calls `GET /api/kahoot/state/[code]` and finds `host_last_seen_at` older than 5 minutes. If pg_cron is active (Pro plan), it also handles this on its hourly pass. Remaining clients see "Session ended" screen. |
 | Host accidentally closes tab | Same as host disconnect — host can navigate back to `/study/kahoot/[sessionId]`; `GET /api/kahoot/state/[code]` restores full game state; host re-subscribes and sees current question/phase |
 | Host double-clicks "Reveal Answer" or "Next Question" | API checks `phase` before acting — second call finds `phase` has already advanced and returns a 409 Conflict; UI disables button immediately on first click |
 | New player tries to join after game started | Join API checks `state`; if `in_progress`, returns error: "This game has already started" |
 | Timer expires, player hasn't answered | Player receives 0 points; a `kahoot_answers` row is inserted with `selected_answer = null`, `is_correct = false`, `score_awarded = 0`, `response_ms = null`; `answers_timeout` incremented in `kahoot_question_stats` |
 | Player submits answer after timer expired | `answered_at > question_revealed_at + time_limit_seconds` → API returns 200 with `{ late: true, score: 0 }`; client shows "Too slow!" |
 | Player submits answer twice (e.g. network retry) | `UNIQUE(session_id, player_id, question_index)` on `kahoot_answers` causes a conflict; API catches it and returns the existing answer data — no duplicate, no crash |
-| "X/Y answered" denominator: player disconnects mid-question | `expected_answer_count` is snapshot at `question_revealed_at`; if a player disconnects, the host's count UI shows "(1 player disconnected)" below the count rather than hanging at N-1/N indefinitely |
+| "X/Y answered" denominator: player disconnects mid-question | `expected_answer_count` is snapshot at `question_revealed_at` and never automatically decremented (server has no Presence listener). If a player disconnects mid-question their answer never arrives. The host view checks `kahoot_player_scores.last_seen_at` for all expected players — any player with `last_seen_at` older than 30 seconds is shown as "(N player(s) disconnected)" below the count. The denominator stays at the snapshot value; the host can still click "Reveal Answer" once the timer expires regardless of count. |
 | Session created with too few approved questions | API counts `approved = true` questions for selected sections; if fewer than `question_count` exist, returns error: "Not enough questions (need 20, found 14 in selected sections)" |
 | Session code collision on generation | Retry up to 10 times checking uniqueness among `state IN ('lobby', 'in_progress')` sessions; after 10 failures (astronomically unlikely), return 500 with a clear error |
 | Duplicate display names (race condition) | `UNIQUE(session_id, display_name)` DB constraint catches the race; second insert throws a conflict error; API returns "That name is already taken" |
@@ -678,7 +751,10 @@ All new functionality is isolated to the four new tables. The existing flashcard
 
 Sessions must be cleaned up to prevent stale codes from accumulating and to keep the database tidy.
 
-**Mechanism: `pg_cron`** (built into Supabase; available on all plans)
+**Primary mechanism: `pg_cron`** (built into Supabase; **Pro plan only** — not available on the free tier)
+
+**Free-tier fallback: lazy cleanup in `GET /api/kahoot/state/[code]`** — when any client fetches state, the endpoint checks if the session is obviously stale before returning. If stale criteria are met, it marks the session `abandoned` in the same request before responding. This ensures cleanup happens on next access even without pg_cron. Both mechanisms can co-exist without conflict (pg_cron marks abandoned; lazy check finds it already abandoned and skips).
+
 
 **Schedule:** Run every hour
 
@@ -738,22 +814,28 @@ WHERE state IN ('lobby', 'in_progress')
 
 ### Phase 1 — Data Layer
 - Create all four tables with correct columns, constraints, and RLS
-- Set up `pg_cron` cleanup job
-- Build `GET /api/kahoot/state/[code]` (the state-recovery endpoint — build this first)
+- Create `get_ordered_questions(p_ids uuid[])` Supabase RPC function (required before any question fetch)
+- Set up `pg_cron` cleanup job (Pro plan only — document free-tier fallback in state endpoint)
+- Add `host_last_seen_at` column to `kahoot_sessions` (used by heartbeat + disconnect detection)
+- Build `GET /api/kahoot/state/[code]` (the state-recovery endpoint — build this first; include lazy cleanup logic)
 - Build `POST /api/kahoot/create`
 - Build `POST /api/kahoot/join` (including rejoin logic)
+- Build `GET /api/kahoot/section-counts` (needed by creation form)
 
 ### Phase 2 — Core Game Backend
 - Build `POST /api/kahoot/start`
+- Build `POST /api/kahoot/heartbeat` (host sends every 15s; updates `host_last_seen_at`)
 - Build `POST /api/kahoot/answer` with server-side scoring and atomic DB updates
 - Build `GET /api/kahoot/answer-count/[id]`
-- Build `POST /api/kahoot/reveal`
+- Build `POST /api/kahoot/reveal` (uses Realtime REST broadcast, not WebSocket channel)
 - Build `POST /api/kahoot/leaderboard`
 - Build `POST /api/kahoot/next`
 - Build `POST /api/kahoot/end`
+- Build `GET /api/kahoot/export/[sessionId]` (CSV download, host auth required)
+- Confirm all route files export `export const dynamic = 'force-dynamic'`
 
 ### Phase 3 — Host Flow
-- Session creation form at `/study/kahoot`
+- Session creation form at `/study/kahoot` (server component passes section counts as props to client form; live "Questions available: N" counter in UI)
 - Lobby view with Presence-based live player list
 - Question view with polling answer count
 - Reveal view with answer breakdown
@@ -769,7 +851,8 @@ WHERE state IN ('lobby', 'in_progress')
 - Final results screen
 
 ### Phase 5 — Reliability & Polish
-- Host disconnect / reconnect flow
+- Host heartbeat: start sending every 15s on game start; stop on game end or tab unload
+- Host disconnect / reconnect flow (detected via `host_last_seen_at` on client state poll, not server Presence)
 - Player rejoin flow (matching localStorage `player_id`)
 - Mobile layout audit (button sizes, timer visibility, no-scroll requirement)
 - All error states (invalid code, game started, name taken, etc.)
@@ -856,4 +939,23 @@ WHERE state IN ('lobby', 'in_progress')
 
 ---
 
-*End of KAHOOT_1.md — Rev 2*
+---
+
+## Appendix B: Rev 3 Architecture Summary (What Changed From Rev 2)
+
+| Area | Rev 2 (Wrong) | Rev 3 (Correct) |
+|---|---|---|
+| Server broadcasting | `supabase.channel().subscribe().send()` — opens a WebSocket per API invocation | Supabase Realtime REST API (`POST /realtime/v1/api/broadcast`) — plain HTTP, no WebSocket |
+| Host disconnect detection | "Server detects via Presence disconnect event" | Client-inferred from `host_last_seen_at` heartbeat; server has no Presence listener |
+| Question ordering | `ORDER BY array_position()` via `.select()` | Supabase RPC `get_ordered_questions(uuid[])` |
+| Session cleanup | pg_cron only | pg_cron (Pro) + lazy cleanup in state endpoint (free-tier fallback) |
+| Route caching | Not addressed | All `/api/kahoot/*` routes export `dynamic = 'force-dynamic'` |
+| Creation form data | Client-fetches `GET /api/kahoot/section-counts` | Server component passes counts as props (same pattern as `select/page.tsx`) |
+| Expected answer count | "Decremented when Presence drops" | Fixed snapshot; disconnected players detected via `last_seen_at` |
+| CSV export | Defined in Section 5.3, no route | `GET /api/kahoot/export/[sessionId]` added to route list |
+| Host heartbeat | Not defined | `POST /api/kahoot/heartbeat` every 15s; updates `host_last_seen_at` |
+| Section counts in form | Greys out < 10 only | Live "Questions available: N" counter with button-disable guard |
+
+---
+
+*End of KAHOOT_1.md — Rev 3*
