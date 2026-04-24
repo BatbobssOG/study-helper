@@ -9,7 +9,8 @@ export default async function SelectPage() {
   const [{ data: classes }, { data: sections }, { data: qRows }] = await Promise.all([
     db.from('classes').select('id, name, slug, display_order').order('display_order'),
     db.from('sections').select('id, name, class_id').order('name'),
-    db.from('quiz_questions').select('section_id').eq('approved', true),
+    // Use a high limit to avoid Supabase's default 1000-row cap truncating counts
+    db.from('quiz_questions').select('section_id').eq('approved', true).limit(10000),
   ])
 
   // Build section_id → count map
