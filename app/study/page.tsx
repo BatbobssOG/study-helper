@@ -3,7 +3,7 @@ import { createAdminClient } from '@/lib/supabase-server'
 import Link from 'next/link'
 
 export default async function StudyPage() {
-  const { userId } = await requireUser()
+  const { id: userId } = await requireUser()
   const db = createAdminClient()
 
   const [{ data: sessions }, { count: totalSessions }, { count: masteredCount }] = await Promise.all([

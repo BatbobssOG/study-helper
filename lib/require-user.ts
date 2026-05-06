@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
 
-export async function requireUser(): Promise<{ userId: string }> {
+export async function requireUser(): Promise<{ id: string }> {
   const cookieStore = await cookies()
 
   const supabase = createServerClient(
@@ -20,5 +20,5 @@ export async function requireUser(): Promise<{ userId: string }> {
 
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
-  return { userId: user.id }
+  return { id: user.id }
 }

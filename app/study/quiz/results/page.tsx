@@ -16,7 +16,7 @@ export default async function QuizResultsPage({
 }: {
   searchParams: Promise<{ attempt?: string }>
 }) {
-  const { userId } = await requireUser()
+  const { id: userId } = await requireUser()
   const { attempt: attemptId } = await searchParams
   if (!attemptId) redirect('/study')
 
