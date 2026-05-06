@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 const PLAYER_ID_KEY = 'pipetrades_player_id'
 
@@ -14,6 +14,14 @@ function getOrCreatePlayerId(): string {
 }
 
 export default function PlayPage() {
+  return (
+    <Suspense fallback={<main className="min-h-screen bg-gray-950" />}>
+      <PlayForm />
+    </Suspense>
+  )
+}
+
+function PlayForm() {
   const router       = useRouter()
   const searchParams = useSearchParams()
 
