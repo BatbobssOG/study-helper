@@ -8,15 +8,16 @@ export const dynamic = 'force-dynamic'
 // page can then call GET /api/kahoot/state/[code].
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   const user = await requireUser()
   const db = createAdminClient()
+  const { id } = await params
 
   const { data: session } = await db
     .from('kahoot_sessions')
     .select('code, host_user_id')
-    .eq('id', params.id)
+    .eq('id', id)
     .single()
 
   if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 })

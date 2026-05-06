@@ -6,11 +6,11 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { sessionId: string } }
+  { params }: { params: Promise<{ sessionId: string }> }
 ) {
   const user = await requireUser()
   const db = createAdminClient()
-  const { sessionId } = params
+  const { sessionId } = await params
 
   const { data: session } = await db
     .from('kahoot_sessions')
