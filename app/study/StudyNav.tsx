@@ -25,6 +25,12 @@ export default function StudyNav({ email }: { email: string }) {
 
       <div className="ml-auto flex items-center gap-3">
         <a
+          href="/study/kahoot"
+          className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-white text-sm font-semibold rounded-lg transition-colors"
+        >
+          🎮 Live Game
+        </a>
+        <a
           href="/study/select"
           className="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 text-white text-sm font-semibold rounded-lg transition-colors"
         >
