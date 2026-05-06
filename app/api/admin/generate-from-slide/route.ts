@@ -11,7 +11,7 @@ function buildPrompt(
   slideTitle: string,
   slideContent: string
 ): string {
-  return `You are writing multiple-choice exam questions for Alberta first-year Pipetrades apprentices (SAIT Winter 2026 Pre-Employment program).
+  return `You are writing exam-quality multiple-choice questions for SAIT Common First Period Pipetrades apprentices (Pre-Employment program). Aim for Alberta Trades Qualifier rigour — application and analysis, not pure recall — while keeping the difficulty at apprentice (not journeyperson) level.
 
 CLASS: ${className}
 SECTION: ${sectionName}
@@ -20,14 +20,31 @@ SLIDE: ${slideTitle}
 SLIDE CONTENT:
 ${slideContent}
 
-RULES — follow exactly:
-1. Base every question SOLELY on facts stated in the slide content above. Do not introduce outside knowledge, regulations, or numbers not present in the slide.
-2. Generate exactly 4 multiple-choice questions.
-3. Each question must have exactly 4 options labelled A, B, C, and D.
-4. The correct_answer field must be a single uppercase letter: "A", "B", "C", or "D".
-5. Vary question types across: recall of definition, application ("which would you use when..."), safety consequence, and comparison.
-6. Write a 1-2 sentence explanation of why the correct answer is right.
-7. Return ONLY a valid JSON array — no markdown fences, no extra text whatsoever.
+GROUNDING RULES
+1. Every fact you assert must be supported by the slide content above. Do not invent numbers, ratings, procedures, or fitting types not present in the slide.
+2. You MAY reference Alberta/Canadian codes and standards (NPC 2015, CAN/CSA-B149.1, ASME B31.1/B31.3, AWWA, ASTM, CSA Z462, Alberta Building Code) ONLY when the slide content itself references them. Cite the specific section/clause if the slide does.
+
+QUESTION DESIGN
+3. Generate exactly 4 multiple-choice questions.
+4. Each question has exactly 4 options labelled A, B, C, D, with one definitively correct answer and three plausible distractors built from common apprentice misconceptions (off-by-one numbers, swapped definitions, similar-sounding fittings, wrong code section, reversed cause/effect, etc.).
+5. Vary question types across the four:
+   - one definition/identification
+   - one application ("which would you use when…", "what is the next step…")
+   - one safety or consequence ("what happens if…", "why must you…")
+   - one comparison ("which has the higher…", "what is the difference between…")
+6. Favour application/analysis stems over pure recall when the slide content allows; pure recall is acceptable only when the slide is itself a definition or specification.
+
+QUALITY CHECKLIST — every question must pass before you output it
+- Stem is clear and unambiguous
+- One definitively correct answer; three distractors are all plausible
+- No clue inside the stem or options that gives the answer away (no "all of the above", no grammatical mismatch between stem and options, no longest-option-is-correct pattern)
+- Difficulty is apprentice-level, not journeyperson-level
+- All numbers, procedures, and terminology match the slide exactly
+
+OUTPUT FORMAT
+7. The correct_answer field must be a single uppercase letter: "A", "B", "C", or "D".
+8. Each question must include a 1–2 sentence explanation that states why the correct answer is right and, where useful, briefly debunks the most tempting distractor.
+9. Return ONLY a valid JSON array — no markdown fences, no commentary, no extra text.
 
 JSON format:
 [
