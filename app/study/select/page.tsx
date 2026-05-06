@@ -8,19 +8,18 @@ export default async function SelectPage() {
   await requireUser()
   const db = createAdminClient()
 
-  const [{ data: classes }, { data: sections }, { data: qRows }] = await Promise.all([
+  const [{ data: classes }, { data: sections }, { data: countRows }] = await Promise.all([
     db.from('classes').select('id, name, slug, display_order').order('display_order'),
     db.from('sections').select('id, name, class_id').order('name'),
-    // Use a high limit to avoid Supabase's default 1000-row cap truncating counts
-    db.from('quiz_questions').select('section_id').eq('approved', true).limit(10000),
+    // Server-side aggregate: avoids PostgREST's 1000-row cap that silently
+    // truncated the per-section counts when total approved > 1000.
+    db.rpc('approved_question_counts_by_section'),
   ])
 
   // Build section_id → count map
   const questionCounts: Record<string, number> = {}
-  for (const row of qRows ?? []) {
-    if (row.section_id) {
-      questionCounts[row.section_id] = (questionCounts[row.section_id] ?? 0) + 1
-    }
+  for (const row of (countRows ?? []) as { section_id: string; question_count: number }[]) {
+    questionCounts[row.section_id] = Number(row.question_count)
   }
 
   return (
