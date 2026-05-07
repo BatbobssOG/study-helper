@@ -33,24 +33,51 @@ export async function GET(req: NextRequest) {
 
   if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 })
 
-  const limit = session.question_count ?? 20
+  const limit      = session.question_count ?? 20
+  const sectionIds: string[] = session.section_ids ?? []
+  const classIds:   string[] = session.class_ids   ?? []
 
-  let query = db
-    .from('quiz_questions')
-    .select('id, question, options, correct_answer, explanation')
-    .eq('approved', true)
-    .limit(limit * 3) // fetch extra to shuffle down to limit
-
-  if (session.section_ids?.length) {
-    query = query.in('section_id', session.section_ids)
-  } else {
-    query = query.in('class_id', session.class_ids)
+  type QRow = {
+    id: string
+    question: string
+    options: unknown
+    correct_answer: string
+    explanation: string
   }
 
-  const { data: questions, error } = await query
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  let pool: QRow[]
 
-  const shuffled = [...(questions ?? [])].sort(() => Math.random() - 0.5).slice(0, limit)
+  if (sectionIds.length > 0) {
+    // Fetch from each section independently so every selected section is
+    // represented in the pool, regardless of physical storage order.
+    // perSection: give each section at least 10 slots, scaling so the
+    // merged pool is roughly 3× the quiz size before we shuffle-down.
+    const perSection = Math.max(10, Math.ceil((limit * 3) / sectionIds.length))
+
+    const results = await Promise.all(
+      sectionIds.map((sid) =>
+        db
+          .from('quiz_questions')
+          .select('id, question, options, correct_answer, explanation')
+          .eq('approved', true)
+          .eq('section_id', sid)
+          .limit(perSection)
+      )
+    )
+    pool = results.flatMap((r) => r.data ?? [])
+  } else {
+    // No specific sections — pull from the whole class
+    const { data } = await db
+      .from('quiz_questions')
+      .select('id, question, options, correct_answer, explanation')
+      .eq('approved', true)
+      .in('class_id', classIds)
+      .limit(limit * 5)
+    pool = data ?? []
+  }
+
+  // Shuffle the merged pool, then take the requested quiz size
+  const shuffled = [...pool].sort(() => Math.random() - 0.5).slice(0, limit)
 
   return NextResponse.json({
     questions: shuffled.map((q) => {

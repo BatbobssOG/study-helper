@@ -3,6 +3,8 @@ import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
 import { createAdminClient } from '@/lib/supabase-server'
 
+const CARDS_PER_SESSION = 50
+
 export async function GET(req: NextRequest) {
   const cookieStore = await cookies()
   const supabase = createServerClient(
@@ -33,22 +35,51 @@ export async function GET(req: NextRequest) {
 
   if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 })
 
-  let query = db
-    .from('quiz_questions')
-    .select('id, question, options, correct_answer, explanation, section_id')
-    .eq('approved', true)
-    .limit(50)
+  const sectionIds: string[] = session.section_ids ?? []
+  const classIds: string[]   = session.class_ids   ?? []
 
-  if (session.section_ids?.length) {
-    query = query.in('section_id', session.section_ids)
-  } else {
-    query = query.in('class_id', session.class_ids)
+  type QRow = {
+    id: string
+    question: string
+    options: unknown
+    correct_answer: string
+    explanation: string
+    section_id: string
   }
 
-  const { data: questions, error } = await query
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  let pool: QRow[]
 
-  const shuffled = [...(questions ?? [])].sort(() => Math.random() - 0.5)
+  if (sectionIds.length > 0) {
+    // Fetch from each section independently so every selected section is
+    // represented in the pool, regardless of physical storage order.
+    // perSection: give each section at least 15 slots, scaling up so the
+    // merged pool is roughly 2× the session size before we shuffle-down.
+    const perSection = Math.max(15, Math.ceil((CARDS_PER_SESSION * 2) / sectionIds.length))
+
+    const results = await Promise.all(
+      sectionIds.map((sid) =>
+        db
+          .from('quiz_questions')
+          .select('id, question, options, correct_answer, explanation, section_id')
+          .eq('approved', true)
+          .eq('section_id', sid)
+          .limit(perSection)
+      )
+    )
+    pool = results.flatMap((r) => r.data ?? [])
+  } else {
+    // No specific sections — pull from the whole class
+    const { data } = await db
+      .from('quiz_questions')
+      .select('id, question, options, correct_answer, explanation, section_id')
+      .eq('approved', true)
+      .in('class_id', classIds)
+      .limit(200)
+    pool = data ?? []
+  }
+
+  // Shuffle the merged pool, then take the session card count
+  const shuffled = [...pool].sort(() => Math.random() - 0.5).slice(0, CARDS_PER_SESSION)
 
   const { data: progress } = await db
     .from('flashcard_progress')
