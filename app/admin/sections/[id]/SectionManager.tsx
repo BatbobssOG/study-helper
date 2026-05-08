@@ -145,6 +145,12 @@ export default function SectionManager({ section, className, slides }: Props) {
           </div>
           <div className="flex gap-3 items-center flex-wrap">
             <Link
+              href={`/admin/sections/${section.id}/questions`}
+              className="px-4 py-2 rounded-lg border border-gray-700 text-gray-300 hover:border-orange-500 hover:text-white text-sm transition-colors"
+            >
+              Manage Questions
+            </Link>
+            <Link
               href="/admin/review"
               className="px-4 py-2 rounded-lg border border-gray-700 text-gray-300 hover:border-orange-500 hover:text-white text-sm transition-colors"
             >
